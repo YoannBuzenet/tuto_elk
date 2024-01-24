@@ -44,3 +44,9 @@ class Search:
             print("okay buddy3")
         print("okay buddy4")    
         return self.insert_documents(documents)
+    
+    def search(self, **query_args):
+        return self.es.search(index='my_documents', **query_args)
+    
+    def retrieve_document(self, id):
+        return self.es.get(index='my_documents', id=id)
