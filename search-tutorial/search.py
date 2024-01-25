@@ -18,16 +18,28 @@ class Search:
         print('Connected to Elasticsearch!')
         pprint(client_info.body)
 
+
     def create_index(self):
         print("okay buddy1")
         self.es.indices.delete(index='my_documents', ignore_unavailable=True)
-        self.es.indices.create(index='my_documents', mappings={
-            'properties': {
-                'embedding': {
-                    'type': 'dense_vector',
+        self.es.indices.create(
+            index='my_documents',
+            mappings={
+                'properties': {
+                    'embedding': {
+                        'type': 'dense_vector',
+                    },
+                    'elser_embedding': {
+                        'type': 'sparse_vector',
+                    },
+                }
+            },
+            settings={
+                'index': {
+                    'default_pipeline': 'elser-ingest-pipeline'
                 }
             }
-        })    
+        ) 
         print("okay buddy1.5")
 
 
@@ -58,10 +70,56 @@ class Search:
         return self.insert_documents(documents)
     
     def search(self, **query_args):
-        return self.es.search(index='my_documents', **query_args)
+        # sub_searches is not currently supported in the client, so we send
+        # search requests as raw requests
+        if 'from_' in query_args:
+            query_args['from'] = query_args['from_']
+            del query_args['from_']
+        return self.es.perform_request(
+            'GET',
+            f'/my_documents/_search',
+            body=json.dumps(query_args),
+            headers={'Content-Type': 'application/json',
+                     'Accept': 'application/json'},
+        )
     
     def retrieve_document(self, id):
         return self.es.get(index='my_documents', id=id)
     
     def get_embedding(self, text):
         return self.model.encode(text)
+    
+    def deploy_elser(self):
+        # download ELSER v2
+        self.es.ml.put_trained_model(model_id='.elser_model_2',
+                                     input={'field_names': ['text_field']})
+        
+        # wait until ready
+        while True:
+            status = self.es.ml.get_trained_models(model_id='.elser_model_2',
+                                                   include='definition_status')
+            if status['trained_model_configs'][0]['fully_defined']:
+                # model is ready
+                break
+            time.sleep(1)
+
+        # deploy the model
+        self.es.ml.start_trained_model_deployment(model_id='.elser_model_2')
+
+        # define a pipeline
+        self.es.ingest.put_pipeline(
+            id='elser-ingest-pipeline',
+            processors=[
+                {
+                    'inference': {
+                        'model_id': '.elser_model_2',
+                        'input_output': [
+                            {
+                                'input_field': 'summary',
+                                'output_field': 'elser_embedding',
+                            }
+                        ]
+                    }
+                }
+            ]
+        )
